@@ -1,0 +1,86 @@
+//
+//
+var colombia = ee.FeatureCollection("INGRESA_AQUI_LA GEOMETRIA");
+var dataset = ee.ImageCollection('ECMWF/ERA5_LAND/MONTHLY_AGGR').first();
+
+var visualization = {
+  bands: ['skin_temperature'],
+  min: 250,
+  max: 320,
+  palette: [
+    '000080', '0000d9', '4000ff', '8000ff', '0080ff', '00ffff',
+    '00ff80', '80ff00', 'daff00', 'ffff00', 'fff500', 'ffda00',
+    'ffb000', 'ffa400', 'ff4f00', 'ff2500', 'ff0a00', 'ff00ff',
+  ]
+};
+
+
+Map.addLayer(dataset, visualization, 'Temperatura Superficial', true, 0.8);
+Map.addLayer(colombia.style({
+  color: 'black',   // Contorno negro
+  fillColor: '00000000'  // Color de fondo transparente (RGBA: 00 = 0% opacidad)
+}), {}, "Colombia");
+Map.centerObject(colombia);
+
+var time_start = '1950', time_end = '2025'
+
+var era5 = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_AGGR")
+  .select('skin_temperature')  // Seleccionamos la banda de temperatura
+  .filterDate(time_start, time_end);
+
+function temporal_collection(collection, start, count, interval, unit){
+  var seq = ee.List.sequence(0, ee.Number(count).subtract(1));
+  var origin_date = ee.Date(start);
+  return ee.ImageCollection(seq.map(function(i){
+    var start_date = origin_date.advance(ee.Number(interval).multiply(i), unit);
+    var end_date = origin_date.advance(ee.Number(interval).multiply(ee.Number(i).add(1)), unit);
+    return collection.filterDate(start_date, end_date).mean()
+      .set('system:time_start', start_date.millis())
+      .set('system:time_end', end_date.millis());
+  }));
+}
+
+var annual = temporal_collection(era5, time_start, 75, 1, 'year')
+  .map(function(img){
+    return img.subtract(273.15)  // Convierte Kelvin a °C
+      .copyProperties(img, img.propertyNames());
+  });
+
+
+var temp_mean = annual.mean();  // Temperatura promedio en todo el período
+
+var change = annual.map(function(img){
+  var eq = img.expression('((temp - mean)/(mean)) * 100', {
+    'temp': img, 
+    'mean': temp_mean
+  }).rename('temp_change');
+  
+  return eq.copyProperties(img, img.propertyNames());
+});
+
+print(
+  ui.Chart.image.series(annual, colombia, ee.Reducer.mean(), 10000, 'system:time_start')
+    .setOptions({
+      title: "Variación anual de la temperatura media para Colombia",  // Título del gráfico
+      hAxis: {title: "Años"},  // Etiqueta del eje X
+      vAxis: {title: "Temperatura °C",viewWindow: {min: 22.5, max: 25}},  // Etiqueta del eje Y
+      lineWidth: 2,
+      pointSize: 3,
+      colors: ["red"],  // Color de la línea
+      series: {0: {labelInLegend: "Temperatura superficial"}}  // Nombre de la línea
+    })
+);
+print(
+  ui.Chart.image.series(change, colombia, ee.Reducer.mean(), 10000, 'system:time_start')
+    .setChartType('ColumnChart')  // Define el tipo de gráfico como columnas
+    .setOptions({
+      title: "Cambio porcentual de la Temperatura en Colombia (1950 - 2024)",  // Nuevo título
+      hAxis: {title: "Años"},  // Etiqueta del eje X
+      vAxis: {
+        title: "Cambio porcentual de temperatura (%)",  // Etiqueta del eje Y
+        viewWindow: {min: -4, max: 6.5}  // Definir rango del eje Y
+      },
+      legend: {position: "none"},  // Ocultar la leyenda (opcional)
+      colors: ["blue"]  // Cambia el color de las barras a azul
+    })
+);

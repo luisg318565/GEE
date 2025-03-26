@@ -1,0 +1,95 @@
+
+var area = ee.FeatureCollection("Ingresa_la_geometria_aquí");
+
+var dataset = ee.ImageCollection('COPERNICUS/DEM/GLO30');
+var elevacion = dataset.select('DEM').mosaic().clip(area);
+
+var elevationVis = {
+  min: 0,
+  max: 2700.0,
+  palette: [
+  "0000ff", "0040ff", "0080ff", "00c0c0", "00ff00",
+  "80ff00", "ffff00", "ff8000", "ff0000", "800000"
+],
+};
+Map.centerObject(area, 8);
+Map.addLayer(elevacion, elevationVis, 'DEM');
+// Obtener la proyección correcta desde la primera imagen del dataset
+var proj = dataset.first().select(0).projection();
+
+// 🔹 Calcular la pendiente en GRADOS
+var pendienteGrados = ee.Terrain.slope(elevacion.setDefaultProjection(proj)).clip(area);
+var pendienteGradosVis = {
+  min: 0,
+  max: 45,  // Escala adecuada para la mayoría de los terrenos
+  palette: ['green', 'yellow', 'red']
+};
+Map.addLayer(pendienteGrados, pendienteGradosVis, 'Pendiente (°)');
+
+// 🔹 Convertir la pendiente de grados a PORCENTAJE
+var pendientePorcentaje = pendienteGrados.expression(
+  "tan(slope * 3.141592653589793 / 180) * 100",  // Conversión a porcentaje
+  {
+    "slope": pendienteGrados
+  }
+).rename('Pendiente_%').clip(area);
+
+// Visualización de la pendiente en porcentaje
+var pendientePorcentajeVis = {
+  min: 0,
+  max: 100,  // Ajusta según la región
+  palette: ['blue', 'green', 'yellow', 'red']
+};
+Map.addLayer(pendientePorcentaje, pendientePorcentajeVis, 'Pendiente (%)');
+
+
+// 🔹 Exportar DEM recortado
+Export.image.toDrive({
+  image: elevacion,
+  description: 'DEM',
+  folder: 'GEE_Exports',  // Carpeta en Google Drive
+  fileNamePrefix: 'DEM',
+  scale: 30,  // Resolución en metros
+  region: area.geometry().bounds(),
+  maxPixels: 1e13
+});
+
+// 🔹 Exportar Pendiente en Grados
+Export.image.toDrive({
+  image: pendienteGrados,
+  description: 'Pendiente_Grados',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Pendiente_Grados',
+  scale: 3000,
+  region: area.geometry().bounds(),
+  maxPixels: 1e13
+});
+
+// 🔹 Exportar Pendiente en Porcentaje
+Export.image.toDrive({
+  image: pendientePorcentaje,
+  description: 'Pendiente_Porcentaje',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Pendiente_Porcentaje',
+  scale: 30,
+  region: area.geometry().bounds(),
+  maxPixels: 1e13
+});
+
+print("🚀 Exportaciones a Google Drive en proceso... Revisa Google Drive en la carpeta 'GEE_Exports'.");
+
+
+// Calcular estadísticas del DEM dentro del área de interés
+var stats = elevacion.reduceRegion({
+  reducer: ee.Reducer.min()
+            .combine(ee.Reducer.max(), '', true)
+            .combine(ee.Reducer.mean(), '', true)
+            .combine(ee.Reducer.median(), '', true)
+            .combine(ee.Reducer.stdDev(), '', true),
+  geometry: area.geometry(),
+  scale: 30,  // Resolución en metros
+  maxPixels: 1e13
+});
+
+// Imprimir estadísticas en la consola de GEE
+print('📊 Estadísticas del DEM:', stats);

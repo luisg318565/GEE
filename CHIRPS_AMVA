@@ -1,0 +1,132 @@
+// Cargar el área de estudio desde tus Assets en GEE
+var hydrobasins = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_7");
+
+// Coordenadas aproximadas de Medellín
+var medellin = ee.Geometry.Point([-75.5636, 6.2518]);
+
+// Filtrar la cuenca que contiene Medellín
+var area = hydrobasins.filterBounds(medellin);
+// Centrar el mapa en el área de estudio y agregarlo al visor
+Map.centerObject(area, 8);
+Map.addLayer(area, {color: 'green'}, 'Área de estudio');
+
+// Definir rango de años de análisis
+var anioInicio = 1984;
+var anioFin = 2024;
+var anios = ee.List.sequence(anioInicio, anioFin);  // lista de años
+var meses = ee.List.sequence(1, 12);                // lista de meses (1-12)
+
+// Paleta de colores: tonos de azul para las series por año
+var escalaAzul = [
+  '#deebf7','#d7e6f5','#d0e1f3','#c9dcf1','#c2d7ef','#bbd2ed','#b4cde9','#adc8e5','#a6c3e1','#9fbedc',
+  '#98b9d8','#91b4d4','#8aaed0','#83a9cc','#7ca4c8','#759fc4','#6e9ac0','#6795bc','#6090b8','#598bb4',
+  '#5286b0','#4b81ac','#447ca8','#3d77a4','#3672a0','#306e9c','#2a6a98','#246694','#1e6290','#185e8c',
+  '#145a88','#105684','#0c527f','#084e7b','#074a77','#064673','#05426f','#043e6b','#033a67','#023663',
+  '#01325f','#002e5b','#002a57','#002653','#00224f','#001e4b','#001a47','#001643','#00123f','#000e3b'
+];
+
+// Obtener los datos de precipitación mensual por año
+var datosPorAnio = anios.map(function(anio) {
+  anio = ee.Number(anio);
+  var dataset = ee.ImageCollection('UCSB-CHG/CHIRPS/PENTAD')  // CHIRPS: precipitación global
+    .filterDate(anio.format('%d-01-01'), anio.format('%d-12-31'))  // filtrar por año
+    .filterBounds(area)                                           // filtrar por área de estudio
+    .select('precipitation');                                     // seleccionar la banda de precipitación
+
+  // Para cada mes, sumar toda la precipitación del mes
+  var mensual = meses.map(function(mes) {
+    var imgMes = dataset.filter(ee.Filter.calendarRange(mes, mes, 'month')).sum(); // suma mensual
+    var valor = imgMes.reduceRegion({
+      reducer: ee.Reducer.mean(),    // promedio sobre el área
+      geometry: area,
+      scale: 5000,
+      maxPixels: 1e13
+    }).get('precipitation');
+    
+    valor = ee.Algorithms.If(ee.Algorithms.IsEqual(valor, null), 0, valor); // evitar valores nulos
+
+    return ee.Feature(null, {
+      'mes': mes,
+      'año': anio,
+      'precipitacion': valor
+    });
+  });
+
+  return ee.FeatureCollection(mensual);
+});
+
+// Unir todos los años en una sola colección de datos
+var datos = ee.FeatureCollection(datosPorAnio).flatten();
+
+// Calcular el promedio mensual general (para todos los años)
+var promedioMensual = meses.map(function(mes) {
+  mes = ee.Number(mes);
+  var datosMes = datos.filter(ee.Filter.eq('mes', mes));
+  var promedio = datosMes.aggregate_mean('precipitacion');
+  return ee.Feature(null, {
+    'mes': mes,
+    'año': 9999,  // marcador especial para identificar la serie de promedio
+    'precipitacion': promedio
+  });
+});
+var promedioFC = ee.FeatureCollection(promedioMensual);
+
+// Combinar los datos originales con el promedio mensual
+var datosCombinados = datos.merge(promedioFC);
+
+// Crear gráfico de líneas agrupado por año (incluye la línea promedio)
+var chart = ui.Chart.feature.groups({
+  features: datosCombinados,
+  xProperty: 'mes',
+  yProperty: 'precipitacion',
+  seriesProperty: 'año'
+})
+.setChartType('LineChart')
+.setOptions({
+  title: 'Precipitación mensual por año - AMVA',
+  hAxis: {
+    title: 'Mes',
+    ticks: [
+      {v: 1, f: 'Ene'}, {v: 2, f: 'Feb'}, {v: 3, f: 'Mar'}, {v: 4, f: 'Abr'},
+      {v: 5, f: 'May'}, {v: 6, f: 'Jun'}, {v: 7, f: 'Jul'}, {v: 8, f: 'Ago'},
+      {v: 9, f: 'Sep'}, {v: 10, f: 'Oct'}, {v: 11, f: 'Nov'}, {v: 12, f: 'Dic'}
+    ]
+  },
+  vAxis: {title: 'Precipitación (mm)'},
+  lineWidth: 1,
+  pointSize: 6,
+  curveType: 'function',
+  legend: {position: 'right'},
+  series: (function() {
+    var spec = {};
+    var nAnios = anios.length().getInfo();
+    for (var i = 0; i < nAnios; i++) {
+      spec[i] = {color: escalaAzul[i], lineWidth: 1};
+    }
+    // Última serie = promedio mensual → color negro y más grueso
+    spec[nAnios] = {color: 'black', lineWidth: 4};
+    return spec;
+  })()
+});
+
+// Mostrar el gráfico
+print(chart);
+
+// =============================
+// Estadísticas adicionales
+// =============================
+
+// Encontrar el mes con la máxima precipitación histórica
+var maxFeature = datos.sort('precipitacion', false).first();
+var maxMes = maxFeature.get('mes');
+var maxAnio = maxFeature.get('año');
+var maxValor = maxFeature.get('precipitacion');
+print('📈 Mes con máxima precipitación histórica:', maxMes, 'Año:', maxAnio, 'Valor (mm):', maxValor);
+
+// Encontrar el mes con la mínima precipitación histórica (>0)
+var datosFiltrados = datos.filter(ee.Filter.gt('precipitacion', 0)); // evitar ceros
+var minFeature = datosFiltrados.sort('precipitacion', true).first();
+var minMes = minFeature.get('mes');
+var minAnio = minFeature.get('año');
+var minValor = minFeature.get('precipitacion');
+print('📉 Mes con mínima precipitación histórica (>0):', minMes, 'Año:', minAnio, 'Valor (mm):', minValor);

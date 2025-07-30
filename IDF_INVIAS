@@ -1,0 +1,84 @@
+// Punto de interés: Planeta Rica, Córdoba
+//var punto = ee.Geometry.Point([-75.393, 8.407]);
+var punto = geometry; 
+// Región: 'R1' Andina, 'R2' Caribe, 'R3' Pacífico, 'R4' Orinoquía
+var region = 'R2';
+
+// Coeficientes por región
+var coef = {
+  'R1': {a:0.94, b:0.18, c:0.66, d:0.63},
+  'R2': {a:24.85,b:0.22,c:0.50,d:0.58},
+  'R3': {a:13.92,b:0.19,c:0.55,d:0.56},
+  'R4': {a:5.53, b:0.17,c:0.63,d:0.42}
+};
+
+var a = coef[region].a;
+var b = coef[region].b;
+var c = coef[region].c;
+var d = coef[region].d;
+
+// Dataset de cuencas (nivel 9 disponible)
+var cuencas = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_6");
+
+// Filtrar la cuenca que contiene el punto
+var cuenca = cuencas.filterBounds(punto);
+Map.centerObject(punto, 9);
+Map.addLayer(cuenca, {color:'blue'}, 'Cuenca seleccionada');
+Map.addLayer(punto, {color:'red'}, 'Punto');
+
+// Cargar precipitación CHIRPS
+var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
+    .filterDate('1981-01-01', '2024-12-31')
+    .filterBounds(cuenca);
+
+// Calcular máximas diarias anuales dentro de la cuenca
+var years = ee.List.sequence(1981, 2024);
+var maxAnuales = years.map(function(y) {
+  var maxDiaria = chirps
+    .filter(ee.Filter.calendarRange(y,y,'year'))
+    .max()
+    .reduceRegion({
+      reducer: ee.Reducer.max(),
+      geometry: cuenca.geometry(),
+      scale: 5000,
+      maxPixels: 1e13
+    });
+  return ee.Feature(null, {'year': y, 'maxima_diaria': maxDiaria.get('precipitation')});
+});
+var maxFC = ee.FeatureCollection(maxAnuales);
+var pmdma = maxFC.aggregate_mean('maxima_diaria');
+
+// Periodos de retorno y duraciones
+// Periodos de retorno y duraciones
+var retornos = ee.List([2, 5, 10, 25, 50, 100]);
+var duraciones = ee.List([ 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 45,60, 120, 180, 360, 720, 1440]);
+
+var datos = retornos.map(function(T) {
+  return duraciones.map(function(t) {
+    var i = ee.Number(a)
+      .multiply(ee.Number(T).pow(b))
+      .multiply(ee.Number(pmdma).pow(c))
+      .divide(ee.Number(t).divide(60).pow(d));
+    return ee.Feature(null, {
+      periodo: T,
+      duracion: t,
+      intensidad: i
+    });
+  });
+}).flatten();
+var datosFC = ee.FeatureCollection(datos);
+
+// Graficar curvas IDF
+var chart = ui.Chart.feature.groups({
+  features: datosFC,
+  xProperty: 'duracion',
+  yProperty: 'intensidad',
+  seriesProperty: 'periodo'
+}).setOptions({
+  title: 'Curvas IDF INVIAS (' + region + ')',
+  hAxis: {title:'Duración (min)', logScale:true},
+  vAxis: {title:'Intensidad (mm/h)'},
+  lineWidth: 2,
+  pointSize: 2
+});
+print(chart);

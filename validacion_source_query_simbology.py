@@ -315,8 +315,8 @@ def table_to_excel_from_rows(rows, header, out_xls):
         return False
 
 if table_to_excel_from_rows(rows, header, out_xls):
-    print(u"✔ XLS creado: {}".format(out_xls))
+    print(u" XLS creado: {}".format(out_xls))
 else:
-    print(u"ℹ️ No se pudo crear .XLS automáticamente. Queda el CSV.")
+    print(u" No se pudo crear .XLS automáticamente. Queda el CSV.")
 
 print(u"FIN.")
